@@ -26,6 +26,8 @@ const accounts: Account[] = [
   },
 ];
 
+const BASE_URL = 'https://practice.expandtesting.com';
+
 async function fileExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -39,23 +41,50 @@ async function authenticateAccount(
   page: Page,
   account: Account,
 ): Promise<void> {
+  page.setDefaultTimeout(60000);
+
   const loginPage = new LoginPage(page);
   const registerPage = new RegisterPage(page);
 
-  await page.goto('/notes/app/login');
+  // Open login page with a longer CI-safe navigation timeout.
+  await page.goto('/notes/app/login', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
 
   await loginPage.login(account.email, account.password);
 
-  if (!page.url().includes('/login')) {
+  // Give the application time to complete authentication.
+  await page.waitForTimeout(2000);
+
+  // If login succeeds, the application should leave /login.
+  try {
+    await page.waitForURL(
+      (url) => !url.pathname.includes('/notes/app/login'),
+      {
+        timeout: 60000,
+      },
+    );
+  } catch {
+    // Login may have failed because the account does not exist yet.
+    // Continue to registration below.
+  }
+
+  // Verify successful authentication.
+  if (!page.url().includes('/notes/app/login')) {
     await page.getByText('MyNotes').waitFor({
       state: 'visible',
-      timeout: 30000,
+      timeout: 60000,
     });
 
     return;
   }
 
-  await page.goto('/notes/app/register');
+  // Account does not appear to exist, so create it.
+  await page.goto('/notes/app/register', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
 
   await registerPage.register(
     account.email,
@@ -64,13 +93,26 @@ async function authenticateAccount(
     account.password,
   );
 
-  await page.goto('/notes/app/login');
+  // Login with the newly created account.
+  await page.goto('/notes/app/login', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
 
   await loginPage.login(account.email, account.password);
 
+  await page.waitForTimeout(2000);
+
+  await page.waitForURL(
+    (url) => !url.pathname.includes('/notes/app/login'),
+    {
+      timeout: 60000,
+    },
+  );
+
   await page.getByText('MyNotes').waitFor({
     state: 'visible',
-    timeout: 30000,
+    timeout: 60000,
   });
 }
 
@@ -79,26 +121,48 @@ export default async function globalSetup(): Promise<void> {
 
   const browser = await chromium.launch();
 
-  for (const account of accounts) {
-    if (await fileExists(account.storagePath)) {
-      console.log(`Using existing auth: ${account.storagePath}`);
-      continue;
+  try {
+    for (const account of accounts) {
+      if (await fileExists(account.storagePath)) {
+        console.log(`Using existing auth: ${account.storagePath}`);
+        continue;
+      }
+
+      console.log(`Authenticating account: ${account.email}`);
+
+      const context = await browser.newContext({
+        baseURL: BASE_URL,
+      });
+
+      const page = await context.newPage();
+
+      try {
+        await authenticateAccount(page, account);
+
+        await context.storageState({
+          path: account.storagePath,
+        });
+
+        console.log(
+          `Authentication successful: ${account.storagePath}`,
+        );
+      } catch (error) {
+        console.log(
+          `Authentication failed for: ${account.email}`,
+        );
+        console.log(`Current URL: ${page.url()}`);
+
+        await page.screenshot({
+          path: `.auth/${account.name}-auth-failure.png`,
+          fullPage: true,
+        });
+
+        throw error;
+      } finally {
+        await context.close();
+      }
     }
-
-    const context = await browser.newContext({
-      baseURL: 'https://practice.expandtesting.com',
-    });
-
-    const page = await context.newPage();
-
-    await authenticateAccount(page, account);
-
-    await context.storageState({
-      path: account.storagePath,
-    });
-
-    await context.close();
+  } finally {
+    await browser.close();
   }
-
-  await browser.close();
 }
