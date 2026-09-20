@@ -37,7 +37,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function isAuthenticated(page: Page): Promise<boolean> {
+async function waitForMyNotes(page: Page): Promise<boolean> {
   try {
     await page.getByText('MyNotes').waitFor({
       state: 'visible',
@@ -50,19 +50,7 @@ async function isAuthenticated(page: Page): Promise<boolean> {
   }
 }
 
-async function openLoginPage(page: Page): Promise<void> {
-  await page.goto('/notes/app/login', {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000,
-  });
-
-  await page.getByLabel('Email address').waitFor({
-    state: 'visible',
-    timeout: 30000,
-  });
-}
-
-async function loginWithRetry(
+async function loginAccount(
   page: Page,
   account: Account,
 ): Promise<boolean> {
@@ -73,14 +61,24 @@ async function loginWithRetry(
       `Login attempt ${attempt}/3 for ${account.email}`,
     );
 
-    await openLoginPage(page);
+    await page.goto('/notes/app/login', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    });
+
+    await page.getByLabel('Email address').waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
 
     await loginPage.login(
       account.email,
       account.password,
     );
 
-    if (await isAuthenticated(page)) {
+    await page.waitForTimeout(3000);
+
+    if (await waitForMyNotes(page)) {
       console.log(
         `Login successful for ${account.email}`,
       );
@@ -91,8 +89,6 @@ async function loginWithRetry(
     console.log(
       `Login attempt ${attempt} did not reach MyNotes.`,
     );
-
-    await page.waitForTimeout(3000);
   }
 
   return false;
@@ -103,6 +99,8 @@ async function registerAccount(
   account: Account,
 ): Promise<void> {
   const registerPage = new RegisterPage(page);
+
+  console.log(`Registering account: ${account.email}`);
 
   await page.goto('/notes/app/register', {
     waitUntil: 'domcontentloaded',
@@ -125,25 +123,21 @@ async function authenticateAccount(
 ): Promise<void> {
   page.setDefaultTimeout(60000);
 
-  // First try to log in to an existing account.
-  if (await loginWithRetry(page, account)) {
+  // First try the existing account.
+  if (await loginAccount(page, account)) {
     return;
   }
 
-  // If login failed, check whether the application explicitly
-  // reports that the account does not exist.
+  // Only register when the application explicitly reports
+  // that the credentials are invalid.
   const loginError = page.getByText(
     'Incorrect email address or password',
   );
 
   if (await loginError.isVisible().catch(() => false)) {
-    console.log(
-      `Account ${account.email} appears not to exist. Registering it.`,
-    );
-
     await registerAccount(page, account);
 
-    if (await loginWithRetry(page, account)) {
+    if (await loginAccount(page, account)) {
       return;
     }
   }
