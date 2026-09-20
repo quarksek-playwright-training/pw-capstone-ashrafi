@@ -1,4 +1,4 @@
-import { test, expect } from '../fixtures/auth.fixture.js';
+﻿import { test, expect } from '../fixtures/auth.fixture.js';
 import { NotesPage } from '../pages/notespage.js';
 import { deleteNote } from '../fixtures/api-cleanup.js';
 
@@ -15,12 +15,14 @@ test.afterEach(async ({ account1Page, request }, testInfo) => {
 
   const noteId = noteIdAttachment.body.toString();
 
-  const token = await account1Page.evaluate(() => {
-    return window.localStorage.getItem('token');
-  });
+  const storageState = await account1Page.context().storageState();
+
+  const token = storageState.origins
+    .flatMap((origin) => origin.localStorage)
+    .find((item) => item.name === 'token')?.value;
 
   if (!token) {
-    throw new Error('Authentication token not found in localStorage.');
+    throw new Error('Authentication token not found in storage state.');
   }
 
   await deleteNote(request, noteId, token);

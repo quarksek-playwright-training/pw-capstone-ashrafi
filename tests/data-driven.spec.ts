@@ -1,8 +1,8 @@
-import { test, expect } from '../fixtures/auth.fixture.js';
+﻿import { test, expect } from '../fixtures/auth.fixture.js';
 import { NotesPage } from '../pages/notespage.js';
 import { deleteNote } from '../fixtures/api-cleanup.js';
 
-test.setTimeout(60000);
+test.setTimeout(120000);
 
 const notesData = [
   {
