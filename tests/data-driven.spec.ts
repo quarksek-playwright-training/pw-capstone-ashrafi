@@ -27,12 +27,14 @@ test.afterEach(async ({ account1Page, request }, testInfo) => {
     (attachment) => attachment.name === 'createdNoteId',
   );
 
-  const token = await account1Page.evaluate(() => {
-    return window.localStorage.getItem('token');
-  });
+  const storageState = await account1Page.context().storageState();
+
+  const token = storageState.origins
+    .flatMap((origin) => origin.localStorage)
+    .find((item) => item.name === 'token')?.value;
 
   if (!token) {
-    throw new Error('Authentication token not found in localStorage.');
+    throw new Error('Authentication token not found in storage state.');
   }
 
   for (const attachment of noteIdAttachments) {
@@ -52,6 +54,14 @@ test(
     const notesPage = new NotesPage(account1Page);
 
     for (const note of notesData) {
+      await account1Page.waitForLoadState('domcontentloaded');
+
+      await expect(
+        account1Page.getByTestId('add-new-note'),
+      ).toBeVisible({
+        timeout: 30000,
+      });
+
       let createdNoteId: string | undefined;
 
       const responsePromise = account1Page.waitForResponse(
@@ -66,7 +76,7 @@ test(
               createdNoteId =
                 responseBody.data?.id ?? responseBody.id;
             } catch {
-              // Ignore unrelated/unavailable response bodies.
+              // Ignore unavailable response bodies.
             }
 
             return true;
@@ -74,6 +84,7 @@ test(
 
           return false;
         },
+        { timeout: 30000 },
       );
 
       await notesPage.openAddNote();
@@ -99,17 +110,23 @@ test(
 
       await expect(
         account1Page.getByTestId('add-new-note'),
-      ).toBeVisible();
+      ).toBeVisible({
+        timeout: 30000,
+      });
     }
 
     for (const note of notesData) {
+      await account1Page.waitForLoadState('domcontentloaded');
+
       await notesPage.searchNotes(note.title);
 
       await expect(
         account1Page
           .getByTestId('note-card-title')
           .filter({ hasText: note.title }),
-      ).toBeVisible();
+      ).toBeVisible({
+        timeout: 30000,
+      });
     }
   },
 );

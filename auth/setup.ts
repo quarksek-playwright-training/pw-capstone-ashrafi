@@ -1,4 +1,4 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 import { chromium, type Page } from '@playwright/test';
 import { mkdir, access } from 'node:fs/promises';
 import { LoginPage } from '../pages/loginpage.js';
@@ -37,6 +37,19 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+async function waitForAuthenticatedArea(page: Page): Promise<boolean> {
+  try {
+    await page.getByText('MyNotes').waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function authenticateAccount(
   page: Page,
   account: Account,
@@ -46,7 +59,6 @@ async function authenticateAccount(
   const loginPage = new LoginPage(page);
   const registerPage = new RegisterPage(page);
 
-  // Open login page with a longer CI-safe navigation timeout.
   await page.goto('/notes/app/login', {
     waitUntil: 'domcontentloaded',
     timeout: 60000,
@@ -54,66 +66,57 @@ async function authenticateAccount(
 
   await loginPage.login(account.email, account.password);
 
-  // Give the application time to complete authentication.
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
 
-  // If login succeeds, the application should leave /login.
-  try {
-    await page.waitForURL(
-      (url) => !url.pathname.includes('/notes/app/login'),
-      {
-        timeout: 60000,
-      },
-    );
-  } catch {
-    // Login may have failed because the account does not exist yet.
-    // Continue to registration below.
-  }
-
-  // Verify successful authentication.
-  if (!page.url().includes('/notes/app/login')) {
-    await page.getByText('MyNotes').waitFor({
-      state: 'visible',
-      timeout: 60000,
-    });
-
+  // Successful login is determined by the authenticated UI,
+  // rather than waiting for a specific navigation event.
+  if (await waitForAuthenticatedArea(page)) {
     return;
   }
 
-  // Account does not appear to exist, so create it.
-  await page.goto('/notes/app/register', {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000,
-  });
-
-  await registerPage.register(
-    account.email,
-    account.password,
-    account.name,
-    account.password,
+  // If the account does not exist, create it.
+  const loginError = page.getByText(
+    'Incorrect email address or password',
   );
 
-  // Login with the newly created account.
-  await page.goto('/notes/app/login', {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000,
-  });
-
-  await loginPage.login(account.email, account.password);
-
-  await page.waitForTimeout(2000);
-
-  await page.waitForURL(
-    (url) => !url.pathname.includes('/notes/app/login'),
-    {
+  if (await loginError.isVisible().catch(() => false)) {
+    await page.goto('/notes/app/register', {
+      waitUntil: 'domcontentloaded',
       timeout: 60000,
-    },
-  );
+    });
 
-  await page.getByText('MyNotes').waitFor({
-    state: 'visible',
-    timeout: 60000,
+    await registerPage.register(
+      account.email,
+      account.password,
+      account.name,
+      account.password,
+    );
+
+    await page.goto('/notes/app/login', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    });
+
+    await loginPage.login(account.email, account.password);
+
+    await page.waitForTimeout(3000);
+
+    if (await waitForAuthenticatedArea(page)) {
+      return;
+    }
+  }
+
+  console.log(`Authentication failed for: ${account.email}`);
+  console.log(`Current URL: ${page.url()}`);
+
+  await page.screenshot({
+    path: `.auth/${account.name}-auth-failure.png`,
+    fullPage: true,
   });
+
+  throw new Error(
+    `Unable to authenticate account: ${account.email}`,
+  );
 }
 
 export default async function globalSetup(): Promise<void> {
@@ -146,18 +149,6 @@ export default async function globalSetup(): Promise<void> {
         console.log(
           `Authentication successful: ${account.storagePath}`,
         );
-      } catch (error) {
-        console.log(
-          `Authentication failed for: ${account.email}`,
-        );
-        console.log(`Current URL: ${page.url()}`);
-
-        await page.screenshot({
-          path: `.auth/${account.name}-auth-failure.png`,
-          fullPage: true,
-        });
-
-        throw error;
       } finally {
         await context.close();
       }
