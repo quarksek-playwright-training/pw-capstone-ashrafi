@@ -37,7 +37,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function waitForAuthenticatedArea(page: Page): Promise<boolean> {
+async function isAuthenticated(page: Page): Promise<boolean> {
   try {
     await page.getByText('MyNotes').waitFor({
       state: 'visible',
@@ -50,63 +50,108 @@ async function waitForAuthenticatedArea(page: Page): Promise<boolean> {
   }
 }
 
+async function openLoginPage(page: Page): Promise<void> {
+  await page.goto('/notes/app/login', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
+
+  await page.getByLabel('Email address').waitFor({
+    state: 'visible',
+    timeout: 30000,
+  });
+}
+
+async function loginWithRetry(
+  page: Page,
+  account: Account,
+): Promise<boolean> {
+  const loginPage = new LoginPage(page);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(
+      `Login attempt ${attempt}/3 for ${account.email}`,
+    );
+
+    await openLoginPage(page);
+
+    await loginPage.login(
+      account.email,
+      account.password,
+    );
+
+    if (await isAuthenticated(page)) {
+      console.log(
+        `Login successful for ${account.email}`,
+      );
+
+      return true;
+    }
+
+    console.log(
+      `Login attempt ${attempt} did not reach MyNotes.`,
+    );
+
+    await page.waitForTimeout(3000);
+  }
+
+  return false;
+}
+
+async function registerAccount(
+  page: Page,
+  account: Account,
+): Promise<void> {
+  const registerPage = new RegisterPage(page);
+
+  await page.goto('/notes/app/register', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000,
+  });
+
+  await registerPage.register(
+    account.email,
+    account.password,
+    account.name,
+    account.password,
+  );
+
+  await page.waitForTimeout(3000);
+}
+
 async function authenticateAccount(
   page: Page,
   account: Account,
 ): Promise<void> {
   page.setDefaultTimeout(60000);
 
-  const loginPage = new LoginPage(page);
-  const registerPage = new RegisterPage(page);
-
-  await page.goto('/notes/app/login', {
-    waitUntil: 'domcontentloaded',
-    timeout: 60000,
-  });
-
-  await loginPage.login(account.email, account.password);
-
-  await page.waitForTimeout(3000);
-
-  // Successful login is determined by the authenticated UI,
-  // rather than waiting for a specific navigation event.
-  if (await waitForAuthenticatedArea(page)) {
+  // First try to log in to an existing account.
+  if (await loginWithRetry(page, account)) {
     return;
   }
 
-  // If the account does not exist, create it.
+  // If login failed, check whether the application explicitly
+  // reports that the account does not exist.
   const loginError = page.getByText(
     'Incorrect email address or password',
   );
 
   if (await loginError.isVisible().catch(() => false)) {
-    await page.goto('/notes/app/register', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-
-    await registerPage.register(
-      account.email,
-      account.password,
-      account.name,
-      account.password,
+    console.log(
+      `Account ${account.email} appears not to exist. Registering it.`,
     );
 
-    await page.goto('/notes/app/login', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
+    await registerAccount(page, account);
 
-    await loginPage.login(account.email, account.password);
-
-    await page.waitForTimeout(3000);
-
-    if (await waitForAuthenticatedArea(page)) {
+    if (await loginWithRetry(page, account)) {
       return;
     }
   }
 
-  console.log(`Authentication failed for: ${account.email}`);
+  console.log(
+    `Authentication failed for: ${account.email}`,
+  );
+
   console.log(`Current URL: ${page.url()}`);
 
   await page.screenshot({
@@ -127,11 +172,16 @@ export default async function globalSetup(): Promise<void> {
   try {
     for (const account of accounts) {
       if (await fileExists(account.storagePath)) {
-        console.log(`Using existing auth: ${account.storagePath}`);
+        console.log(
+          `Using existing auth: ${account.storagePath}`,
+        );
+
         continue;
       }
 
-      console.log(`Authenticating account: ${account.email}`);
+      console.log(
+        `Authenticating account: ${account.email}`,
+      );
 
       const context = await browser.newContext({
         baseURL: BASE_URL,
